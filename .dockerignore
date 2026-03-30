@@ -1,0 +1,7 @@
+.git/
+*.ipynb
+Dataset/
+output/
+__pycache__/
+*.pth
+.gitattributes
