@@ -22,9 +22,8 @@ from utils import initialize_weights
 
 
 class Generator(nn.Module):
-    def __init__(self, nz, ngf, nc, ngpu):
+    def __init__(self, nz, ngf, nc):
         super().__init__()
-        self.ngpu = ngpu
         self.main = nn.Sequential(
             nn.ConvTranspose2d(nz, ngf * 8, 4, 1, 0, bias=False),
             nn.BatchNorm2d(ngf * 8),
@@ -42,14 +41,13 @@ class Generator(nn.Module):
             nn.Tanh()
         )
 
-    def forward(self, input):
-        return self.main(input)
+    def forward(self, x):
+        return self.main(x)
 
 
 class Discriminator(nn.Module):
-    def __init__(self, nc, ndf, ngpu):
+    def __init__(self, nc, ndf):
         super().__init__()
-        self.ngpu = ngpu
         self.main = nn.Sequential(
             nn.Conv2d(nc, ndf, 4, 2, 1, bias=False),
             nn.LeakyReLU(0.2, inplace=True),
@@ -66,16 +64,19 @@ class Discriminator(nn.Module):
             nn.Sigmoid()
         )
 
-    def forward(self, input):
-        return self.main(input)
+    def forward(self, x):
+        return self.main(x)
 
 
 def train(args):
     # Seed for reproducibility
     random.seed(args.seed)
     torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() and args.ngpu > 0 else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     # Data pipeline
@@ -95,10 +96,10 @@ def train(args):
     print(f"Dataset: {len(dataset)} images, {len(dataloader)} batches")
 
     # Models
-    netG = Generator(args.nz, args.ngf, args.nc, args.ngpu).to(device)
+    netG = Generator(args.nz, args.ngf, args.nc).to(device)
     netG.apply(initialize_weights)
 
-    netD = Discriminator(args.nc, args.ndf, args.ngpu).to(device)
+    netD = Discriminator(args.nc, args.ndf).to(device)
     netD.apply(initialize_weights)
 
     criterion = nn.BCELoss()
@@ -112,66 +113,64 @@ def train(args):
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
-    log_file = open(os.path.join(args.output_dir, "training_log.txt"), "w")
 
     print("Starting training...")
     G_losses = []
     D_losses = []
 
-    for epoch in range(args.epochs):
-        for i, data in enumerate(dataloader, 0):
-            # Update Discriminator
-            netD.zero_grad()
-            real_cpu = data[0].to(device)
-            b_size = real_cpu.size(0)
-            label = torch.full((b_size,), real_label, dtype=torch.float, device=device)
+    with open(os.path.join(args.output_dir, "training_log.txt"), "w") as log_file:
+        for epoch in range(args.epochs):
+            for i, data in enumerate(dataloader, 0):
+                # Update Discriminator
+                netD.zero_grad()
+                real_cpu = data[0].to(device)
+                b_size = real_cpu.size(0)
+                label = torch.full((b_size,), real_label, dtype=torch.float, device=device)
 
-            output = netD(real_cpu).view(-1)
-            errD_real = criterion(output, label)
-            errD_real.backward()
-            D_x = output.mean().item()
+                output = netD(real_cpu).view(-1)
+                errD_real = criterion(output, label)
+                errD_real.backward()
+                D_x = output.mean().item()
 
-            noise = torch.randn(b_size, args.nz, 1, 1, device=device)
-            fake = netG(noise)
-            label.fill_(fake_label)
-            output = netD(fake.detach()).view(-1)
-            errD_fake = criterion(output, label)
-            errD_fake.backward()
-            D_G_z1 = output.mean().item()
-            errD = errD_real + errD_fake
-            optimizerD.step()
+                noise = torch.randn(b_size, args.nz, 1, 1, device=device)
+                fake = netG(noise)
+                label.fill_(fake_label)
+                output = netD(fake.detach()).view(-1)
+                errD_fake = criterion(output, label)
+                errD_fake.backward()
+                D_G_z1 = output.mean().item()
+                errD = errD_real + errD_fake
+                optimizerD.step()
 
-            # Update Generator
-            netG.zero_grad()
-            label.fill_(real_label)
-            output = netD(fake).view(-1)
-            errG = criterion(output, label)
-            errG.backward()
-            D_G_z2 = output.mean().item()
-            optimizerG.step()
+                # Update Generator
+                netG.zero_grad()
+                label.fill_(real_label)
+                output = netD(fake).view(-1)
+                errG = criterion(output, label)
+                errG.backward()
+                D_G_z2 = output.mean().item()
+                optimizerG.step()
 
-            if i % 50 == 0:
-                line = (
-                    f"[{epoch}/{args.epochs}][{i}/{len(dataloader)}]\t"
-                    f"Loss_D: {errD.item():.4f}\tLoss_G: {errG.item():.4f}\t"
-                    f"D(x): {D_x:.4f}\tD(G(z)): {D_G_z1:.4f} / {D_G_z2:.4f}"
-                )
-                print(line)
-                log_file.write(line + "\n")
-                log_file.flush()
+                if i % 50 == 0:
+                    line = (
+                        f"[{epoch}/{args.epochs}][{i}/{len(dataloader)}]\t"
+                        f"Loss_D: {errD.item():.4f}\tLoss_G: {errG.item():.4f}\t"
+                        f"D(x): {D_x:.4f}\tD(G(z)): {D_G_z1:.4f} / {D_G_z2:.4f}"
+                    )
+                    print(line)
+                    log_file.write(line + "\n")
+                    log_file.flush()
 
-            G_losses.append(errG.item())
-            D_losses.append(errD.item())
+                G_losses.append(errG.item())
+                D_losses.append(errD.item())
 
-        # Save sample images each epoch
-        with torch.no_grad():
-            fake = netG(fixed_noise).detach().cpu()
-        vutils.save_image(
-            fake, os.path.join(args.output_dir, f"fake_epoch_{epoch:03d}.png"),
-            normalize=True, nrow=8
-        )
-
-    log_file.close()
+            # Save sample images each epoch
+            with torch.no_grad():
+                fake = netG(fixed_noise).detach().cpu()
+            vutils.save_image(
+                fake, os.path.join(args.output_dir, f"fake_epoch_{epoch:03d}.png"),
+                normalize=True, nrow=8
+            )
 
     # Save weights
     torch.save(netG.state_dict(), os.path.join(args.output_dir, "netG_weights.pth"))
@@ -192,7 +191,6 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs")
     parser.add_argument("--lr", type=float, default=0.0002, help="Learning rate for Adam")
     parser.add_argument("--beta1", type=float, default=0.5, help="Beta1 for Adam optimizer")
-    parser.add_argument("--ngpu", type=int, default=1, help="Number of GPUs (0 for CPU)")
     parser.add_argument("--output_dir", type=str, default="output", help="Output directory for weights and samples")
     parser.add_argument("--seed", type=int, default=999, help="Random seed for reproducibility")
     args = parser.parse_args()
