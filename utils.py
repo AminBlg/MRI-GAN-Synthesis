@@ -1,63 +1,12 @@
-import os, gzip, torch
+import os
 import torch.nn as nn
 import numpy as np
 import imageio
 import matplotlib.pyplot as plt
-from torchvision import datasets, transforms
-
-
-def load_mnist(dataset):
-    data_dir = os.path.join("./data", dataset)
-
-    def extract_data(filename, num_data, head_size, data_size):
-        with gzip.open(filename) as bytestream:
-            bytestream.read(head_size)
-            buf = bytestream.read(data_size * num_data)
-            data = np.frombuffer(buf, dtype=np.uint8).astype(np.float64)
-        return data
-
-    data = extract_data(data_dir + '/train-images-idx3-ubyte.gz', 60000, 16, 28 * 28)
-    trX = data.reshape((60000, 28, 28, 1))
-
-    data = extract_data(data_dir + '/train-labels-idx1-ubyte.gz', 60000, 8, 1)
-    trY = data.reshape((60000))
-
-    data = extract_data(data_dir + '/t10k-images-idx3-ubyte.gz', 10000, 16, 28 * 28)
-    teX = data.reshape((10000, 28, 28, 1))
-
-    data = extract_data(data_dir + '/t10k-labels-idx1-ubyte.gz', 10000, 8, 1)
-    teY = data.reshape((10000))
-
-    trY = np.asarray(trY).astype(np.int64)
-    teY = np.asarray(teY)
-
-    X = np.concatenate((trX, teX), axis=0)
-    y = np.concatenate((trY, teY), axis=0).astype(np.int64)
-
-    seed = 547
-    np.random.seed(seed)
-    np.random.shuffle(X)
-    np.random.seed(seed)
-    np.random.shuffle(y)
-
-    y_vec = np.zeros((len(y), 10), dtype=np.float64)
-    for i, label in enumerate(y):
-        y_vec[i, y[i]] = 1
-
-    X = X.transpose(0, 3, 1, 2) / 255.
-
-    X = torch.from_numpy(X).type(torch.FloatTensor)
-    y_vec = torch.from_numpy(y_vec).type(torch.FloatTensor)
-    return X, y_vec
-
-
-def load_image_folder(dir, transform, batch_size, shuffle):
-    dset = datasets.ImageFolder(dir, transform)
-    data_loader = torch.utils.data.DataLoader(dset, batch_size, shuffle)
-    return data_loader
 
 
 def print_network(net):
+    """Print network architecture and parameter count."""
     num_params = 0
     for param in net.parameters():
         num_params += param.numel()
@@ -66,15 +15,13 @@ def print_network(net):
 
 
 def save_images(images, size, image_path):
-    return imsave(images, size, image_path)
-
-
-def imsave(images, size, path):
+    """Save a grid of images to disk."""
     image = np.squeeze(merge(images, size))
-    return imageio.imwrite(path, image)
+    return imageio.imwrite(image_path, image)
 
 
 def merge(images, size):
+    """Merge multiple images into a single grid."""
     h, w = images.shape[1], images.shape[2]
     if images.shape[3] in (3, 4):
         c = images.shape[3]
@@ -98,36 +45,23 @@ def merge(images, size):
         )
 
 
-def generate_animation(path, num):
-    images = []
-    for e in range(num):
-        img_name = path + '_epoch%03d' % (e + 1) + '.png'
-        images.append(imageio.imread(img_name))
-    imageio.mimsave(path + '_generate_animation.gif', images, fps=5)
-
-
 def loss_plot(hist, path='Train_hist.png', model_name=''):
+    """Plot discriminator and generator loss curves."""
     x = range(len(hist['D_loss']))
-
-    y1 = hist['D_loss']
-    y2 = hist['G_loss']
-
-    plt.plot(x, y1, label='D_loss')
-    plt.plot(x, y2, label='G_loss')
-
+    plt.plot(x, hist['D_loss'], label='D_loss')
+    plt.plot(x, hist['G_loss'], label='G_loss')
     plt.xlabel('Iter')
     plt.ylabel('Loss')
-
     plt.legend(loc=4)
     plt.grid(True)
     plt.tight_layout()
-
     path = os.path.join(path, model_name + '_loss.png')
     plt.savefig(path)
     plt.close()
 
 
 def initialize_weights(net):
+    """Initialize network weights following DCGAN paper conventions."""
     for m in net.modules():
         if isinstance(m, nn.Conv2d):
             m.weight.data.normal_(0, 0.02)
@@ -135,3 +69,8 @@ def initialize_weights(net):
             m.weight.data.normal_(0, 0.02)
         elif isinstance(m, nn.Linear):
             m.weight.data.normal_(0, 0.02)
+            if m.bias is not None:
+                m.bias.data.zero_()
+        elif isinstance(m, nn.BatchNorm2d):
+            m.weight.data.normal_(1.0, 0.02)
+            m.bias.data.zero_()
